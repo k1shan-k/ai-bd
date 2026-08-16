@@ -1,0 +1,65 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: sponsorflow
+      POSTGRES_USER: sponsorflow
+      POSTGRES_PASSWORD: local-only-change-me
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U sponsorflow"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+
+  migrate:
+    build:
+      context: .
+      dockerfile: backend/Dockerfile
+    command: ["alembic", "upgrade", "head"]
+    environment: &backend-environment
+      SPONSORFLOW_DATABASE_URL: postgresql+psycopg://sponsorflow:local-only-change-me@postgres/sponsorflow
+      SPONSORFLOW_PROVIDER_MODE: fake
+      SPONSORFLOW_ADMIN_API_KEY: local-admin-key
+      SPONSORFLOW_INBOUND_WEBHOOK_TOKEN: local-webhook-key
+      SPONSORFLOW_PROVIDER_ENCRYPTION_KEY: MDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDA=
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  api:
+    build:
+      context: .
+      dockerfile: backend/Dockerfile
+    environment: *backend-environment
+    ports: ["8000:8000"]
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+
+  worker:
+    build:
+      context: .
+      dockerfile: backend/Dockerfile
+    command: ["python", "-m", "app.worker", "--interval", "5"]
+    environment: *backend-environment
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+
+  crm:
+    build:
+      context: .
+      dockerfile: frontend/Dockerfile
+    environment:
+      INTERNAL_API_URL: http://api:8000/api/v1
+      INTERNAL_API_ORIGIN: http://api:8000
+      SPONSORFLOW_ADMIN_API_KEY: local-admin-key
+      SPONSORFLOW_WEB_ADMIN_PASSWORD: local-admin-password
+      SPONSORFLOW_WEB_SESSION_SECRET: local-session-secret-change-before-sharing
+    ports: ["3000:3000"]
+    depends_on: [api]
+
+volumes:
+  postgres-data:

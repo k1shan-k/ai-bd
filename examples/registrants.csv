@@ -1,0 +1,4 @@
+name,email,telegram,whatsapp,company,role,timezone,sponsor_answer
+Ava Sponsor,ava@example.com,@ava_sponsor,+15550000001,Example Labs,Partnerships Lead,America/New_York,yes
+Mika Maybe,mika@example.com,mika_maybe,,Future Systems,Founder,Europe/London,maybe
+Noah Attendee,noah@example.com,@noah_attendee,,Attendee Co,Engineer,Asia/Singapore,no
