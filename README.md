@@ -9,11 +9,11 @@ The repository includes a fail-closed fake-provider simulation for local develop
 - Exact yes/maybe CSV eligibility, mapping preview, row provenance, conflict quarantine, idempotent file claims, and cross-event contact deduplication.
 - Global identity suppression across email, Telegram, and WhatsApp; every existing event relationship is stopped together.
 - Immutable, validated Markdown context snapshots for event facts, audience, packages, inventory, FAQ, qualification, escalation, voice, and negotiation caps.
-- Deterministic day-0 email + Telegram and day-2/5/10 follow-ups, with WhatsApp fallback on day 5 when available.
+- Deterministic day-0 email + Telegram; a successful initial Telegram send schedules day-2/5/10 follow-ups, with WhatsApp fallback on day 5 when available.
 - Account-wide hard maximum of 20 newly contacted Telegram prospects per configured quota day. Configuration may lower this limit but cannot raise it.
-- Contact-local daytime windows, event cutoffs, durable scheduled actions, transactional outbox, provider idempotency keys, and reply cancellation fences.
+- Contact-local daytime windows, event cutoffs, durable scheduled actions, a transactional outbox, local correlation keys, reply cancellation fences, and explicit stops for ambiguous provider outcomes.
 - Source-cited research abstraction with confidence thresholds and safe escalation.
-- Unified inbound event normalization, replay claims, message history, delivery state, qualification, slot offering, and idempotent booking.
+- Unified inbound event normalization, replay claims, message history, delivery state, qualification, slot offering, and locally correlated booking.
 - Deterministic offer validation for package, floor price, discount, perks, inventory, expiry, replacement, rejection, and selected winning offer.
 - Operator CRM for context, imports, pipeline, research, conversations, schedules, offers, meetings, quota, suppression, providers, analytics, manual takeover, and audits.
 - Admin/operator/viewer API-key roles in exposed environments and fresh raw-body HMAC protection for normalized provider callbacks.
@@ -95,6 +95,7 @@ These are explicit release blockers, not successful test results. CI or the auth
 
 ## Documentation
 
+- [Full technical reference](docs/technical-reference.md)
 - [Production deployment](docs/deployment.md)
 - [Architecture and workflows](docs/architecture.md)
 - [Provider validation and production wiring](docs/provider-validation.md)
