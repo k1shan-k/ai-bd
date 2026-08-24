@@ -35,7 +35,8 @@ def canonical_policy_text(value: str) -> str:
 
 def policy_phrase_present(term: str, text: str) -> bool:
     canonical_term = canonical_policy_text(term)
-    return bool(canonical_term) and f" {canonical_term} " in f" {text} "
+    canonical_text = canonical_policy_text(text)
+    return bool(canonical_term) and f" {canonical_term} " in f" {canonical_text} "
 
 
 def is_suppressed(session: Session, contact: Contact) -> bool:
@@ -71,12 +72,13 @@ def evaluate_send(
         or action.action_type in {"conversation_reply", "manual_reply", "meeting_slots"},
         "not_suppressed": not is_suppressed(session, contact),
         "before_cutoff": cutoff is None or now < cutoff,
-        "pending": action.status in {"pending", "queued"},
+        "pending": action.status in {"pending", "queued", "generating"},
     }
     try:
         local_now = now.astimezone(ZoneInfo(contact.timezone))
         checks["local_daytime"] = (
-            settings.outreach_start_hour <= local_now.hour < settings.outreach_end_hour
+            local_now.weekday() < 5
+            and settings.outreach_start_hour <= local_now.hour < settings.outreach_end_hour
         )
     except ZoneInfoNotFoundError:
         checks["local_daytime"] = False

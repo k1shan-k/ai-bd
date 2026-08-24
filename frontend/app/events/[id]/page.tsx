@@ -1,14 +1,24 @@
 "use client";
 
 import Link from "next/link";
-import { use, useEffect, useState } from "react";
+import { use, useEffect, useRef, useState } from "react";
 import { api, upload } from "@/lib/api";
 
 type ContextVersion = {
   id: string;
   version: number;
   content_hash: string;
+  documents: Record<string, string>;
   activated_at: string;
+};
+type EventRecord = {
+  id: string;
+  name: string;
+  slug: string;
+  starts_at: string | null;
+  outreach_cutoff_at: string | null;
+  timezone: string;
+  status: string;
 };
 type Campaign = {
   id: string;
@@ -37,6 +47,7 @@ const defaults: Record<string, string> = {
   "voice-and-style.md": "---\npersona: sponsorship team\nlanguage: English\nidentity_disclosure: team\n---\nBe concise, helpful, transparent, and never claim to be a named human.",
   "event.md": "---\nname: Example Event\ntimezone: UTC\n---\nDescribe the event, date, location, audience, and proof here.",
   "audience.md": "---\nexpected_attendance: 250\n---\nDescribe the attendees and sponsor fit.",
+  "sales-deck.md": "---\nowner: partnerships\napproved_for_outreach: true\n---\nExplain why this event matters, sponsor outcomes, audience fit, approved positioning, and the next step. Never promise leads, revenue, investment, or attendee personal data.",
   "packages.md": "---\npackages:\n  - id: gold\n    name: Gold Partner\n    list_price: 10000\n    min_price: 9000\n    perks: [stage mention, booth, logo]\n  - id: silver\n    name: Silver Partner\n    list_price: 5000\n    min_price: 4500\n    perks: [booth, logo]\n---\nPackage positioning and benefits.",
   "negotiation-policy.md": "---\ncurrency: USD\nmax_discount_percent: 10\nallowed_custom_perks: [newsletter mention]\nforbidden_promises: [guaranteed sales, attendee personal data]\nmandatory_escalation: [legal terms, custom contract]\noffer_expiry_days: 7\n---\nNegotiate only inside these caps.",
   "inventory.md": "---\ninventory:\n  gold: 2\n  silver: 5\n---\nInventory for this event.",
@@ -47,7 +58,13 @@ const defaults: Record<string, string> = {
 
 export default function EventWorkspace({ params }: { params: Promise<{ id: string }> }) {
   const { id } = use(params);
-  const [documents, setDocuments] = useState(defaults);
+  const [documents, setDocuments] = useState<Record<string, string>>({ ...defaults });
+  const [eventName, setEventName] = useState("");
+  const [eventTimezone, setEventTimezone] = useState("UTC");
+  const [eventStartsAt, setEventStartsAt] = useState("");
+  const [eventCutoffAt, setEventCutoffAt] = useState("");
+  const restoredContext = useRef<string | null>(null);
+  const restoredEvent = useRef<string | null>(null);
   const [contexts, setContexts] = useState<ContextVersion[]>([]);
   const [campaigns, setCampaigns] = useState<Campaign[]>([]);
   const [imports, setImports] = useState<ImportJob[]>([]);
@@ -56,13 +73,29 @@ export default function EventWorkspace({ params }: { params: Promise<{ id: strin
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
 
+  function localDateTime(value: string | null) {
+    return value || "";
+  }
+
   async function load() {
     try {
-      const [contextData, campaignData, importData] = await Promise.all([
+      const [eventData, contextData, campaignData, importData] = await Promise.all([
+        api<EventRecord>(`/events/${id}`),
         api<ContextVersion[]>(`/events/${id}/contexts`),
         api<Campaign[]>(`/events/${id}/campaigns`),
         api<ImportJob[]>(`/events/${id}/imports`),
       ]);
+      if (restoredEvent.current !== id) {
+        setEventName(eventData.name);
+        setEventTimezone(eventData.timezone);
+        setEventStartsAt(localDateTime(eventData.starts_at));
+        setEventCutoffAt(localDateTime(eventData.outreach_cutoff_at));
+        restoredEvent.current = id;
+      }
+      if (restoredContext.current === null && contextData[0]) {
+        setDocuments({ ...defaults, ...contextData[0].documents });
+        restoredContext.current = contextData[0].id;
+      }
       setContexts(contextData);
       setCampaigns(campaignData);
       setImports(importData);
@@ -72,7 +105,11 @@ export default function EventWorkspace({ params }: { params: Promise<{ id: strin
     }
   }
 
-  useEffect(() => { void load(); }, [id]);
+  useEffect(() => {
+    restoredContext.current = null;
+    restoredEvent.current = null;
+    void load();
+  }, [id]);
 
   async function perform(work: () => Promise<unknown>, success?: string) {
     setBusy(true);
@@ -106,6 +143,21 @@ export default function EventWorkspace({ params }: { params: Promise<{ id: strin
         body: JSON.stringify({ documents }),
       }),
       "Activated a new immutable context snapshot.",
+    );
+  }
+
+  function saveEventDetails() {
+    return perform(
+      () => api<EventRecord>(`/events/${id}`, {
+        method: "PATCH",
+        body: JSON.stringify({
+          name: eventName,
+          timezone: eventTimezone,
+          starts_at: eventStartsAt || null,
+          outreach_cutoff_at: eventCutoffAt || null,
+        }),
+      }),
+      "Event details updated. Existing campaign context snapshots remain immutable.",
     );
   }
 
@@ -170,6 +222,17 @@ export default function EventWorkspace({ params }: { params: Promise<{ id: strin
     {result && <pre className="success">{result}</pre>}
 
     {tab === "context" && <section className="grid">
+      <article className="card full">
+        <h2>Event details</h2>
+        <p>These operational dates control scheduling. Activated sales-kit versions remain immutable.</p>
+        <div className="form">
+          <div><label>Event name</label><input value={eventName} onChange={(event) => setEventName(event.target.value)} /></div>
+          <div><label>IANA timezone</label><input value={eventTimezone} onChange={(event) => setEventTimezone(event.target.value)} placeholder="America/New_York" /></div>
+          <div><label>Starts at (ISO 8601)</label><input value={eventStartsAt} onChange={(event) => setEventStartsAt(event.target.value)} placeholder="2027-01-15T09:00:00-05:00" /></div>
+          <div><label>Outreach cutoff (ISO 8601)</label><input value={eventCutoffAt} onChange={(event) => setEventCutoffAt(event.target.value)} placeholder="2027-01-10T18:00:00-05:00" /></div>
+          <button disabled={busy} onClick={saveEventDetails}>Save event details</button>
+        </div>
+      </article>
       {Object.entries(documents).map(([name, value]) => <article className="card" key={name}>
         <h3>{name}</h3>
         <textarea value={value} onChange={(event) => setDocuments({ ...documents, [name]: event.target.value })} />
@@ -205,7 +268,7 @@ export default function EventWorkspace({ params }: { params: Promise<{ id: strin
         </div>)}
       </article>
       <article className="card"><h2>Fast sequence</h2><p>Day 0 email + Telegram, then days 2, 5, and 10. Telegram admits only 20 new contacts per account day; WhatsApp is a silent-lead fallback.</p><button disabled={busy || !contexts.length || Boolean(activeCampaign)} onClick={createCampaign}>{activeCampaign ? "Campaign active" : "Create and activate"}</button></article>
-      <article className="card full"><h2>Context versions</h2>{contexts.map((context) => <div className="row" key={context.id}><div><strong>Version {context.version}</strong><p style={{ margin: 0 }}>{context.content_hash.slice(0, 20)}… · {new Date(context.activated_at).toLocaleString()}</p></div><span className="pill">immutable</span></div>)}</article>
+      <article className="card full"><h2>Context versions</h2>{contexts.map((context) => <div className="row" key={context.id}><div><strong>Version {context.version}</strong><p style={{ margin: 0 }}>{context.content_hash.slice(0, 20)}… · {new Date(context.activated_at).toLocaleString()}</p></div><div><button className="secondary" onClick={() => { setDocuments({ ...defaults, ...context.documents }); restoredContext.current = context.id; setTab("context"); }}>Edit from this version</button>{" "}<span className="pill">immutable</span></div></div>)}</article>
     </section>}
   </>;
 }

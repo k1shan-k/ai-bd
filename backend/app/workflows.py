@@ -1,4 +1,5 @@
-from datetime import UTC, datetime, time, timedelta
+from datetime import datetime, timedelta
+from uuid import uuid4
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from sqlalchemy import select
@@ -10,7 +11,9 @@ from app.adapters import (
     RetryableProviderError,
     TerminalProviderError,
 )
+from app.brain import GeneratedOutreach, compose_outreach
 from app.config import Settings
+from app.llm import LLMClient, llm_client
 from app.models import (
     Campaign,
     Contact,
@@ -27,25 +30,13 @@ from app.models import (
 )
 from app.policy import evaluate_send, reserve_telegram_new_contact
 from app.research import research_lead
-
-
-def aware(value: datetime) -> datetime:
-    return value if value.tzinfo else value.replace(tzinfo=UTC)
-
-
-def next_local_window(now: datetime, timezone: str, settings: Settings, days: int = 0) -> datetime:
-    try:
-        zone = ZoneInfo(timezone)
-    except ZoneInfoNotFoundError:
-        zone = ZoneInfo("UTC")
-    local = aware(now).astimezone(zone) + timedelta(days=days)
-    target_date = local.date()
-    if days == 0 and local.hour >= settings.outreach_end_hour:
-        target_date += timedelta(days=1)
-    if days == 0 and settings.outreach_start_hour <= local.hour < settings.outreach_end_hour:
-        return aware(now)
-    target = datetime.combine(target_date, time(settings.outreach_start_hour), tzinfo=zone)
-    return target.astimezone(UTC)
+from app.timing import (
+    aware,
+    business_time_after_delay,
+    humanized_outreach_time,
+    next_local_window,
+    stable_int,
+)
 
 
 def ensure_conversation(session: Session, lead: EventLead) -> Conversation:
@@ -58,38 +49,26 @@ def ensure_conversation(session: Session, lead: EventLead) -> Conversation:
     return conversation
 
 
-def compose_message(
-    *, lead: EventLead, contact: Contact, context: ContextVersion, report: ResearchReport, action: str
-) -> str:
-    event_name = context.compiled.get("event", {}).get("name", "our event")
-    company = contact.company_name or "your team"
-    fit_angle = (
-        report.fit_angles[0]
-        if report.fit_angles
-        else f"Explore how {company} could connect with the event audience."
-    )
-    if action == "initial_email":
-        return (
-            f"Hi {contact.full_name},\n\nThanks for indicating that {company} may be interested "
-            f"in sponsoring {event_name}. Our sponsorship team identified this possible fit: "
-            f"{fit_angle} Would you like a quick overview of the available packages?\n\n"
-            "Best,\nThe Sponsorship Team"
-        )
-    if action == "initial_telegram":
-        return (
-            f"Hi {contact.full_name} — the sponsorship team for {event_name} here. "
-            "You indicated possible sponsorship interest when registering. Happy to share the "
-            "short package overview or answer questions here."
-        )
-    if action == "whatsapp_fallback":
-        return (
-            f"Hi {contact.full_name}, this is the {event_name} sponsorship team. "
-            "Following up on the sponsorship interest from your registration. Would a short "
-            "package summary be useful?"
-        )
-    return (
-        f"Hi {contact.full_name}, a quick follow-up from the {event_name} sponsorship team. "
-        "Would you like details on the available sponsorship options, or should we close the loop?"
+async def compose_message(
+    client: LLMClient,
+    settings: Settings,
+    *,
+    lead: EventLead,
+    contact: Contact,
+    context: ContextVersion,
+    report: ResearchReport,
+    action: str,
+    channel: str,
+) -> GeneratedOutreach:
+    return await compose_outreach(
+        client,
+        settings,
+        lead=lead,
+        contact=contact,
+        context=context,
+        report=report,
+        action=action,
+        channel=channel,
     )
 
 
@@ -139,7 +118,7 @@ def _add_action(
     return action
 
 
-def start_lead_workflow(
+async def start_lead_workflow(
     session: Session,
     lead: EventLead,
     campaign: Campaign,
@@ -172,22 +151,63 @@ def start_lead_workflow(
     if settings.provider_mode == "live" and (
         not report or report.provider != settings.research_provider
     ):
-        report = research_lead(session, lead, settings=settings)
+        report = await research_lead(session, lead, settings=settings, context=context)
     elif not report:
-        report = research_lead(session, lead, settings=settings)
+        report = await research_lead(session, lead, settings=settings, context=context)
+
+    lead = session.scalar(
+        select(EventLead)
+        .where(EventLead.id == lead.id)
+        .with_for_update()
+        .execution_options(populate_existing=True)
+    )
+    campaign = session.get(Campaign, campaign.id, populate_existing=True)
+    if not lead or not campaign:
+        raise ValueError("lead or campaign disappeared while research was running")
+    if lead.sponsor_answer not in {"yes", "maybe"}:
+        raise ValueError("lead eligibility changed while research was running")
+    if lead.state in {"won", "lost", "unresponsive", "suppressed"}:
+        raise ValueError("lead became terminal while research was running")
+    if lead.automation_status != "active":
+        raise ValueError("lead automation stopped while research was running")
+    if campaign.status != "active" or lead.event_id != campaign.event_id:
+        raise ValueError("campaign changed while research was running")
+    if lead.campaign_id and lead.campaign_id != campaign.id:
+        raise ValueError("lead was assigned to another campaign while research was running")
+    if lead.context_version_id and lead.context_version_id != campaign.context_version_id:
+        raise ValueError("lead context changed while research was running")
+    context = session.get(ContextVersion, campaign.context_version_id, populate_existing=True)
+    if not context or context.event_id != campaign.event_id:
+        raise ValueError("campaign context changed while research was running")
+
     first_start = lead.campaign_id is None
     lead.campaign_id = campaign.id
     lead.context_version_id = campaign.context_version_id
     if first_start:
         lead.state = "ready"
         lead.delivery_state = "scheduled"
-    due = next_local_window(now, lead.contact.timezone, settings)
+    due = humanized_outreach_time(
+        now,
+        lead.contact.timezone,
+        settings,
+        seed=f"lead:{lead.id}:initial_email:0",
+    )
+    telegram_due = business_time_after_delay(
+        due,
+        lead.contact.timezone,
+        settings,
+        delay_seconds=stable_int(
+            f"lead:{lead.id}:initial_telegram:0",
+            settings.cross_channel_gap_min_minutes * 60,
+            settings.cross_channel_gap_max_minutes * 60,
+        ),
+    )
     actions = [
         _add_action(session, lead, "initial_email", "email", due, 0),
-        _add_action(session, lead, "initial_telegram", "telegram", due + timedelta(minutes=5), 0),
+        _add_action(session, lead, "initial_telegram", "telegram", telegram_due, 0),
     ]
     if not first_start and actions[1].status == "sent":
-        schedule_followups(session, lead, campaign, aware(now))
+        schedule_followups(session, lead, campaign, aware(now), settings)
     if first_start:
         session.add(
             TimelineEvent(
@@ -205,6 +225,7 @@ def schedule_followups(
     lead: EventLead,
     campaign: Campaign,
     anchor: datetime,
+    settings: Settings,
 ) -> None:
     for index, day in enumerate(campaign.followup_days, start=1):
         channel = "telegram" if index % 2 == 1 else "email"
@@ -212,30 +233,70 @@ def schedule_followups(
         if day == campaign.whatsapp_fallback_day and lead.contact.whatsapp_normalized:
             channel = "whatsapp"
             action_type = "whatsapp_fallback"
+        due_at = humanized_outreach_time(
+            anchor,
+            lead.contact.timezone,
+            settings,
+            seed=f"lead:{lead.id}:{action_type}:{index}",
+            days=day,
+        )
         _add_action(
             session,
             lead,
             action_type,
             channel,
-            aware(anchor) + timedelta(days=day),
+            due_at,
             index,
         )
 
 
-def enqueue_due_actions(
+async def enqueue_due_actions(
     session: Session,
     now: datetime,
     settings: Settings,
     limit: int = 100,
+    brain: LLMClient | None = None,
 ) -> dict[str, int]:
     now = aware(now)
+    brain = brain or llm_client(settings)
+    result = {
+        "queued": 0,
+        "cancelled": 0,
+        "rescheduled": 0,
+        "quota_deferred": 0,
+        "llm_review_required": 0,
+        "llm_failed": 0,
+        "generation_recovered": 0,
+        "generation_discarded": 0,
+    }
+    stale_before = now - timedelta(seconds=settings.llm_generation_stale_seconds)
+    generating = session.scalars(
+        select(ScheduledAction).where(ScheduledAction.status == "generating")
+    ).all()
+    for stale_action in generating:
+        generation = stale_action.payload.get("generation") or {}
+        raw_started = generation.get("started_at")
+        try:
+            started_at = aware(datetime.fromisoformat(str(raw_started).replace("Z", "+00:00")))
+        except (TypeError, ValueError):
+            started_at = datetime.min.replace(tzinfo=now.tzinfo)
+        if started_at > stale_before:
+            continue
+        payload = dict(stale_action.payload)
+        payload.pop("generation", None)
+        stale_action.payload = payload
+        stale_action.status = "pending"
+        stale_action.attempt += 1
+        result["generation_recovered"] += 1
+    if result["generation_recovered"]:
+        session.commit()
+
     action_ids = session.scalars(
         select(ScheduledAction.id)
         .where(ScheduledAction.status == "pending", ScheduledAction.due_at <= now)
         .order_by(ScheduledAction.due_at)
         .limit(limit)
     ).all()
-    result = {"queued": 0, "cancelled": 0, "rescheduled": 0, "quota_deferred": 0}
     for action_id in action_ids:
         preview = session.get(ScheduledAction, action_id)
         if not preview:
@@ -306,21 +367,6 @@ def enqueue_due_actions(
                 session.commit()
                 continue
 
-        if action.channel == "telegram" and action.action_type == "initial_telegram":
-            try:
-                quota_zone = ZoneInfo(settings.telegram_quota_timezone)
-            except ZoneInfoNotFoundError:
-                quota_zone = ZoneInfo("UTC")
-            quota_date = now.astimezone(quota_zone).date()
-            reserved, _count = reserve_telegram_new_contact(
-                session, quota_date, settings.telegram_daily_new_contact_limit
-            )
-            if not reserved:
-                action.due_at = next_local_window(now, contact.timezone, settings, days=1)
-                result["quota_deferred"] += 1
-                session.commit()
-                continue
-
         context = session.get(ContextVersion, lead.context_version_id)
         report = session.scalar(
             select(ResearchReport)
@@ -350,9 +396,164 @@ def enqueue_due_actions(
             result["cancelled"] += 1
             session.commit()
             continue
-        body = action.payload.get("body") or compose_message(
-            lead=lead, contact=contact, context=context, report=report, action=action.action_type
-        )
+        generated: GeneratedOutreach | None = None
+        if action.payload.get("body"):
+            body = str(action.payload["body"])
+            subject = action.payload.get("subject")
+            generation_provenance = dict(action.payload.get("generation_provenance") or {})
+        else:
+            claim_token = str(uuid4())
+            context_id = context.id
+            report_id = report.id
+            payload = dict(action.payload)
+            payload["generation"] = {
+                "claim_token": claim_token,
+                "started_at": now.isoformat(),
+                "context_version_id": context_id,
+                "research_report_id": report_id,
+            }
+            action.payload = payload
+            action.status = "generating"
+            session.commit()
+            try:
+                generated = await compose_message(
+                    brain,
+                    settings,
+                    lead=lead,
+                    contact=contact,
+                    context=context,
+                    report=report,
+                    action=action.action_type,
+                    channel=action.channel,
+                )
+            except Exception as exc:
+                failed_lead = session.scalar(
+                    select(EventLead)
+                    .where(EventLead.id == lead.id)
+                    .with_for_update()
+                    .execution_options(populate_existing=True)
+                )
+                failed_action = session.scalar(
+                    select(ScheduledAction)
+                    .where(ScheduledAction.id == action_id)
+                    .with_for_update()
+                    .execution_options(populate_existing=True)
+                )
+                failed_generation = (
+                    failed_action.payload.get("generation") if failed_action else None
+                ) or {}
+                if (
+                    failed_action
+                    and failed_action.status == "generating"
+                    and failed_generation.get("claim_token") == claim_token
+                ):
+                    failed_action.status = "failed"
+                    failed_action.cancelled_reason = "llm_generation_failed"
+                    if failed_lead:
+                        failed_lead.state = "escalated"
+                        session.add(
+                            TimelineEvent(
+                                lead_id=failed_lead.id,
+                                event_type="escalated",
+                                data={
+                                    "reason": "llm_generation_failed",
+                                    "action_id": failed_action.id,
+                                    "error_type": type(exc).__name__,
+                                },
+                            )
+                        )
+                    result["llm_failed"] += 1
+                    session.commit()
+                else:
+                    session.rollback()
+                    result["generation_discarded"] += 1
+                continue
+
+            lead = session.scalar(
+                select(EventLead)
+                .where(EventLead.id == lead.id)
+                .with_for_update()
+                .execution_options(populate_existing=True)
+            )
+            action = session.scalar(
+                select(ScheduledAction)
+                .where(ScheduledAction.id == action_id)
+                .with_for_update()
+                .execution_options(populate_existing=True)
+            )
+            generation = (action.payload.get("generation") if action else None) or {}
+            if (
+                not lead
+                or not action
+                or action.status != "generating"
+                or generation.get("claim_token") != claim_token
+            ):
+                session.rollback()
+                result["generation_discarded"] += 1
+                continue
+            contact = session.get(Contact, lead.contact_id, populate_existing=True)
+            event = session.get(Event, lead.event_id, populate_existing=True)
+            context = session.get(ContextVersion, context_id)
+            report = session.get(ResearchReport, report_id)
+            if (
+                not contact
+                or not event
+                or not context
+                or not report
+                or lead.context_version_id != context_id
+                or report.lead_id != lead.id
+            ):
+                action.status = "cancelled"
+                action.cancelled_reason = "generation_snapshot_stale"
+                result["cancelled"] += 1
+                session.commit()
+                continue
+            decision = evaluate_send(session, lead, event, contact, action, now, settings)
+            if not decision.allowed:
+                action.status = "cancelled"
+                action.cancelled_reason = ",".join(decision.reasons)
+                session.add(
+                    TimelineEvent(
+                        lead_id=lead.id,
+                        event_type="generation_discarded",
+                        data={
+                            "action_id": action.id,
+                            "reasons": decision.reasons,
+                            "claim_token": claim_token,
+                        },
+                    )
+                )
+                result["generation_discarded"] += 1
+                session.commit()
+                continue
+            payload = dict(action.payload)
+            payload.pop("generation", None)
+            action.payload = payload
+            if generated.requires_human_review:
+                action.status = "cancelled"
+                action.cancelled_reason = "llm_review_required"
+                lead.state = "escalated"
+                session.add(
+                    TimelineEvent(
+                        lead_id=lead.id,
+                        event_type="escalated",
+                        data={
+                            "reason": "llm_review_required",
+                            "action_id": action.id,
+                            "review_reasons": generated.review_reasons,
+                            "confidence": generated.confidence,
+                            "provider": generated.provider,
+                            "model": generated.model,
+                            "prompt_hash": generated.prompt_hash,
+                        },
+                    )
+                )
+                result["llm_review_required"] += 1
+                session.commit()
+                continue
+            body = generated.body
+            subject = generated.subject
+            generation_provenance = generated.provenance()
         identity = {
             "email": contact.email_normalized,
             "telegram": contact.telegram_normalized,
@@ -364,6 +565,21 @@ def enqueue_due_actions(
             result["cancelled"] += 1
             session.commit()
             continue
+        if action.channel == "telegram" and action.action_type == "initial_telegram":
+            try:
+                quota_zone = ZoneInfo(settings.telegram_quota_timezone)
+            except ZoneInfoNotFoundError:
+                quota_zone = ZoneInfo("UTC")
+            quota_date = now.astimezone(quota_zone).date()
+            reserved, _count = reserve_telegram_new_contact(
+                session, quota_date, settings.telegram_daily_new_contact_limit
+            )
+            if not reserved:
+                action.status = "pending"
+                action.due_at = next_local_window(now, contact.timezone, settings, days=1)
+                result["quota_deferred"] += 1
+                session.commit()
+                continue
         outbox_key = f"send:{action.id}"
         outbox = session.scalar(select(OutboxEvent).where(OutboxEvent.idempotency_key == outbox_key))
         if not outbox:
@@ -373,12 +589,17 @@ def enqueue_due_actions(
                     aggregate_id=lead.id,
                     event_type="message.send",
                     idempotency_key=outbox_key,
+                    # Availability must follow the workflow clock so a simulated or replayed
+                    # cycle can dispatch what it just queued instead of waiting on wall time.
+                    available_at=now,
                     payload={
                         "action_id": action.id,
                         "lead_id": lead.id,
                         "channel": action.channel,
                         "identity": identity,
                         "body": body,
+                        "subject": subject,
+                        "generation_provenance": generation_provenance,
                         "action_type": action.action_type,
                         "contact_name": contact.full_name,
                         "contact_email": contact.email_normalized,
@@ -477,6 +698,7 @@ async def dispatch_outbox(
                     "lead_id": lead.id,
                     "action_type": payload.get("action_type", action.action_type),
                     "contact_name": payload.get("contact_name", contact.full_name),
+                    "subject": payload.get("subject"),
                 },
             )
             conversation = ensure_conversation(session, lead)
@@ -493,7 +715,7 @@ async def dispatch_outbox(
                     provenance={
                         "research_report_id": payload["research_report_id"],
                         "policy": decision.checks,
-                        "composer": "deterministic-v1",
+                        **dict(payload.get("generation_provenance") or {}),
                     },
                 )
             )
@@ -515,7 +737,7 @@ async def dispatch_outbox(
             if action.action_type == "initial_telegram" and lead.campaign_id:
                 campaign = session.get(Campaign, lead.campaign_id)
                 if campaign:
-                    schedule_followups(session, lead, campaign, aware(now))
+                    schedule_followups(session, lead, campaign, aware(now), settings)
             result["sent"] += 1
         except RetryableProviderError as exc:
             outbox.attempts += 1
@@ -567,7 +789,7 @@ async def run_worker_cycle(
 
     expired_offers = release_expired_offers(session, aware(now))
     session.commit()
-    queued = enqueue_due_actions(session, now, settings, limit)
+    queued = await enqueue_due_actions(session, now, settings, limit)
     dispatched = await dispatch_outbox(session, adapters, settings, now, limit)
     return {
         "expired_offer_reservations": expired_offers,

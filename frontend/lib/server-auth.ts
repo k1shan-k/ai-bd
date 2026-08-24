@@ -42,11 +42,18 @@ export function verifyPassword(password: string) {
   return left.length === right.length && timingSafeEqual(left, right);
 }
 
+function useSecureCookie() {
+  const environment = process.env.SPONSORFLOW_ENVIRONMENT?.trim().toLowerCase();
+  if (environment === "development") return false;
+  if (environment === "production") return true;
+  return process.env.NODE_ENV === "production";
+}
+
 export const authCookie = {
   name: COOKIE_NAME,
   options: {
     httpOnly: true,
-    secure: process.env.NODE_ENV === "production",
+    secure: useSecureCookie(),
     sameSite: "strict" as const,
     path: "/",
     maxAge: SESSION_SECONDS,

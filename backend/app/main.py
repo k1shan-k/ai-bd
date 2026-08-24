@@ -74,6 +74,7 @@ from app.schemas import (
     DeliveryEventRequest,
     EventCreate,
     EventRead,
+    EventUpdate,
     ImportMapping,
     ImportPreview,
     ImportSummary,
@@ -301,9 +302,7 @@ async def save_provider_config(
             "revision": row.revision,
             "enabled": row.enabled,
             "config_fields": sorted(body.config),
-            "secret_fields_changed": sorted(
-                set(body.secrets) | set(body.clear_secrets)
-            ),
+            "secret_fields_changed": sorted(set(body.secrets) | set(body.clear_secrets)),
         },
     )
     session.commit()
@@ -328,7 +327,11 @@ async def check_provider_config(
         match = next((item for item in checks if item["provider"] == provider), None)
         if provider == "tavily":
             match = next(
-                (item for item in checks if item["provider"] == registry.settings.research_provider),
+                (
+                    item
+                    for item in checks
+                    if item["provider"] == registry.settings.research_provider
+                ),
                 None,
             )
         details = (match or {}).get("details", {"reason": "provider check unavailable"})
@@ -358,9 +361,7 @@ async def start_telegram_auth(
     actor: tuple[str, str] = Depends(require_admin),
 ):
     row = session.scalar(
-        select(ProviderConfig)
-        .where(ProviderConfig.provider == "telegram")
-        .with_for_update()
+        select(ProviderConfig).where(ProviderConfig.provider == "telegram").with_for_update()
     )
     if not row:
         raise HTTPException(409, "save the Telegram API ID, phone, and API hash first")
@@ -409,9 +410,7 @@ async def confirm_telegram_auth(
     actor: tuple[str, str] = Depends(require_admin),
 ):
     row = session.scalar(
-        select(ProviderConfig)
-        .where(ProviderConfig.provider == "telegram")
-        .with_for_update()
+        select(ProviderConfig).where(ProviderConfig.provider == "telegram").with_for_update()
     )
     if not row:
         raise HTTPException(409, "Telegram authentication has not started")
@@ -475,6 +474,10 @@ def create_event(
 ):
     if session.scalar(select(Event).where(Event.slug == body.slug)):
         raise HTTPException(409, "event slug already exists")
+    try:
+        ZoneInfo(body.timezone)
+    except ZoneInfoNotFoundError as exc:
+        raise HTTPException(422, "event timezone is not a valid IANA timezone") from exc
     if body.starts_at and body.outreach_cutoff_at and body.outreach_cutoff_at > body.starts_at:
         raise HTTPException(422, "outreach cutoff must not be after event start")
     event = Event(**body.model_dump())
@@ -491,6 +494,57 @@ def list_events(
     session: Session = Depends(get_session), _actor: tuple[str, str] = Depends(actor_context)
 ):
     return session.scalars(select(Event).order_by(Event.created_at.desc())).all()
+
+
+@app.get(f"{settings.api_prefix}/events/{{event_id}}", response_model=EventRead)
+def get_event(
+    event_id: str,
+    session: Session = Depends(get_session),
+    _actor: tuple[str, str] = Depends(actor_context),
+):
+    return get_or_404(session, Event, event_id)
+
+
+@app.patch(f"{settings.api_prefix}/events/{{event_id}}", response_model=EventRead)
+def update_event(
+    event_id: str,
+    body: EventUpdate,
+    session: Session = Depends(get_session),
+    actor: tuple[str, str] = Depends(require_write),
+):
+    event = get_or_404(session, Event, event_id)
+    session.refresh(event, with_for_update=True)
+    updates = body.model_dump(exclude_unset=True)
+    if "name" in updates and not updates["name"]:
+        raise HTTPException(422, "event name cannot be empty")
+    if "timezone" in updates:
+        if not updates["timezone"]:
+            raise HTTPException(422, "event timezone cannot be empty")
+        try:
+            ZoneInfo(updates["timezone"])
+        except ZoneInfoNotFoundError as exc:
+            raise HTTPException(422, "event timezone is not a valid IANA timezone") from exc
+    starts_at = updates.get("starts_at", event.starts_at)
+    cutoff = updates.get("outreach_cutoff_at", event.outreach_cutoff_at)
+    comparable_start = (
+        starts_at.replace(tzinfo=UTC) if starts_at and starts_at.tzinfo is None else starts_at
+    )
+    comparable_cutoff = cutoff.replace(tzinfo=UTC) if cutoff and cutoff.tzinfo is None else cutoff
+    if comparable_start and comparable_cutoff and comparable_cutoff > comparable_start:
+        raise HTTPException(422, "outreach cutoff must not be after event start")
+    for field, value in updates.items():
+        setattr(event, field, value)
+    audit(
+        session,
+        "event.update",
+        "event",
+        event.id,
+        actor[0],
+        body.model_dump(exclude_unset=True, mode="json"),
+    )
+    session.commit()
+    session.refresh(event)
+    return event
 
 
 @app.post(f"{settings.api_prefix}/events/{{event_id}}/contexts/validate")
@@ -576,9 +630,7 @@ def list_campaigns(
 ):
     get_or_404(session, Event, event_id)
     return session.scalars(
-        select(Campaign)
-        .where(Campaign.event_id == event_id)
-        .order_by(Campaign.created_at.desc())
+        select(Campaign).where(Campaign.event_id == event_id).order_by(Campaign.created_at.desc())
     ).all()
 
 
@@ -738,6 +790,11 @@ def get_lead(
         .where(ScheduledAction.lead_id == lead.id)
         .order_by(ScheduledAction.due_at)
     ).all()
+    outbox_events = session.scalars(
+        select(OutboxEvent)
+        .where(OutboxEvent.aggregate_id == lead.id)
+        .order_by(OutboxEvent.created_at.desc())
+    ).all()
     reports = session.scalars(
         select(ResearchReport)
         .where(ResearchReport.lead_id == lead.id)
@@ -787,13 +844,24 @@ def get_lead(
                 "channel": item.channel,
                 "due_at": item.due_at,
                 "status": item.status,
+                "attempt": item.attempt,
                 "cancelled_reason": item.cancelled_reason,
             }
             for item in schedules
         ],
-        "research": [
-            ResearchRead.model_validate(item).model_dump(mode="json") for item in reports
+        "outbox": [
+            {
+                "id": item.id,
+                "event_type": item.event_type,
+                "status": item.status,
+                "attempts": item.attempts,
+                "available_at": item.available_at,
+                "processed_at": item.processed_at,
+                "last_error": item.last_error,
+            }
+            for item in outbox_events
         ],
+        "research": [ResearchRead.model_validate(item).model_dump(mode="json") for item in reports],
         "offers": [
             {
                 "id": item.id,
@@ -880,7 +948,7 @@ def suppress_lead(
 
 
 @app.post(f"{settings.api_prefix}/leads/{{lead_id}}/research", response_model=ResearchRead)
-def research(
+async def research(
     lead_id: str,
     body: ResearchRequest,
     session: Session = Depends(get_session),
@@ -890,10 +958,10 @@ def research(
     if settings.environment == "production" and body.provider == "fake":
         raise HTTPException(409, "fake research is disabled in production")
     try:
-        report = research_lead(session, lead, body.provider, registry.settings)
+        report = await research_lead(session, lead, body.provider, registry.settings)
     except ValueError as exc:
         raise as_http_error(exc) from exc
-    audit(session, "research.complete", "lead", lead.id, actor[0], {"provider": body.provider})
+    audit(session, "research.complete", "lead", lead.id, actor[0], {"provider": report.provider})
     session.commit()
     session.refresh(report)
     return report
@@ -922,12 +990,10 @@ async def launch_campaign(
     launch_time = body.now or datetime.now(UTC)
     for lead in leads:
         try:
-            with session.begin_nested():
-                start_lead_workflow(
-                    session, lead, campaign, launch_time, registry.settings
-                )
+            await start_lead_workflow(session, lead, campaign, launch_time, registry.settings)
             launched.append(lead.id)
         except ValueError as exc:
+            session.rollback()
             skipped.append({"lead_id": lead.id, "reason": str(exc)})
     audit(
         session,
@@ -963,14 +1029,17 @@ async def simulate_campaign(
     launched: list[str] = []
     for lead in session.scalars(statement).all():
         try:
-            with session.begin_nested():
-                start_lead_workflow(session, lead, campaign, simulation_start, settings)
+            await start_lead_workflow(session, lead, campaign, simulation_start, settings)
             launched.append(lead.id)
         except ValueError:
+            session.rollback()
             continue
     cycles = []
     for day in [0, 2, 5, 10]:
-        logical_now = simulation_start + timedelta(days=day, minutes=10)
+        logical_now = simulation_start + timedelta(
+            days=day,
+            minutes=240 if day == 0 else 300,
+        )
         cycles.append(
             {
                 "logical_now": logical_now.isoformat(),
@@ -1000,7 +1069,7 @@ async def start_workflow(
     lead = get_or_404(session, EventLead, lead_id)
     campaign = get_or_404(session, Campaign, body.campaign_id)
     try:
-        actions = start_lead_workflow(
+        actions = await start_lead_workflow(
             session, lead, campaign, body.now or datetime.now(UTC), registry.settings
         )
     except ValueError as exc:
@@ -1141,7 +1210,12 @@ async def verify_whatsapp_webhook(
     token = request.query_params.get("hub.verify_token")
     challenge = request.query_params.get("hub.challenge")
     expected = registry.settings.whatsapp_verify_token
-    if mode != "subscribe" or not expected or not token or not secrets.compare_digest(token, expected):
+    if (
+        mode != "subscribe"
+        or not expected
+        or not token
+        or not secrets.compare_digest(token, expected)
+    ):
         raise HTTPException(403, "WhatsApp webhook verification failed")
     return Response(content=challenge or "", media_type="text/plain")
 
@@ -1269,9 +1343,7 @@ async def calcom_webhook(
         return {"accepted": True, "ignored": trigger}
     start_value = payload.get("startTime") or payload.get("start")
     starts_at = (
-        datetime.fromisoformat(str(start_value).replace("Z", "+00:00"))
-        if start_value
-        else None
+        datetime.fromisoformat(str(start_value).replace("Z", "+00:00")) if start_value else None
     )
     event_id = str(body.get("id") or f"{trigger}:{booking_id}:{start_value or ''}")
     metadata = payload.get("metadata") or {}
@@ -1375,9 +1447,7 @@ async def create_meeting(
     actor: tuple[str, str] = Depends(require_write),
 ):
     lead = get_or_404(session, EventLead, lead_id)
-    meeting = await book_meeting(
-        session, registry, lead, body.starts_at, body.timezone
-    )
+    meeting = await book_meeting(session, registry, lead, body.starts_at, body.timezone)
     audit(session, "meeting.book", "meeting", meeting.id, actor[0])
     session.commit()
     return {
@@ -1484,8 +1554,8 @@ def list_scheduled_actions(
     session: Session = Depends(get_session),
     _actor: tuple[str, str] = Depends(actor_context),
 ):
-    statement = select(ScheduledAction).order_by(ScheduledAction.due_at).limit(
-        max(1, min(limit, 500))
+    statement = (
+        select(ScheduledAction).order_by(ScheduledAction.due_at).limit(max(1, min(limit, 500)))
     )
     if status:
         statement = statement.where(ScheduledAction.status == status)
@@ -1514,9 +1584,9 @@ def analytics(
     if event_id:
         lead_query = lead_query.where(EventLead.event_id == event_id)
     pipeline = {state: count for state, count in session.execute(lead_query).all()}
-    message_query = select(
-        Message.direction, Message.channel, func.count(Message.id)
-    ).group_by(Message.direction, Message.channel)
+    message_query = select(Message.direction, Message.channel, func.count(Message.id)).group_by(
+        Message.direction, Message.channel
+    )
     if event_id:
         message_query = (
             message_query.join(Conversation, Conversation.id == Message.conversation_id)
@@ -1534,6 +1604,12 @@ def analytics(
     quota_date = datetime.now(UTC).astimezone(quota_zone).date()
     today_quota = session.get(TelegramDailyQuota, quota_date)
     total_leads = sum(pipeline.values())
+    outbox_statuses = {
+        status: count
+        for status, count in session.execute(
+            select(OutboxEvent.status, func.count(OutboxEvent.id)).group_by(OutboxEvent.status)
+        ).all()
+    }
     engaged = sum(
         pipeline.get(state, 0)
         for state in ["engaged", "qualified", "negotiating", "call_booked", "won"]
@@ -1556,9 +1632,8 @@ def analytics(
         "pending_actions": session.scalar(
             select(func.count(ScheduledAction.id)).where(ScheduledAction.status == "pending")
         ),
-        "pending_outbox": session.scalar(
-            select(func.count(OutboxEvent.id)).where(OutboxEvent.status == "pending")
-        ),
+        "pending_outbox": outbox_statuses.get("pending", 0),
+        "outbox_statuses": outbox_statuses,
         "suppressed_identities": session.scalar(select(func.count(SuppressionEntry.id))),
     }
 
@@ -1577,9 +1652,7 @@ def export_event(
     ).all()
     output = io.StringIO()
     writer = csv.writer(output)
-    writer.writerow(
-        ["lead_id", "name", "email", "telegram", "whatsapp", "sponsor_answer", "state"]
-    )
+    writer.writerow(["lead_id", "name", "email", "telegram", "whatsapp", "sponsor_answer", "state"])
     for lead, contact in rows:
         writer.writerow(
             [

@@ -34,7 +34,7 @@ async function validSession(token?: string) {
   }
 }
 
-export async function middleware(request: NextRequest) {
+export async function proxy(request: NextRequest) {
   const authenticated = await validSession(request.cookies.get(COOKIE_NAME)?.value);
   if (authenticated) return NextResponse.next();
   const login = new URL("/login", request.url);

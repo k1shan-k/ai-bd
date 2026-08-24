@@ -1,10 +1,21 @@
 {$SPONSORFLOW_DOMAIN} {
     encode zstd gzip
-    reverse_proxy crm:3000
+
+    request_body {
+        max_size 26MB
+    }
+
+    reverse_proxy crm:3000 {
+        # Overwrite any client-supplied value; the CRM trusts this header only behind Caddy.
+        header_up X-Real-IP {remote_host}
+    }
 
     header {
         Strict-Transport-Security "max-age=31536000; includeSubDomains"
+        Content-Security-Policy "default-src 'self'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'; object-src 'none'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self'; font-src 'self' data:"
+        Permissions-Policy "camera=(), microphone=(), geolocation=(), payment=(), usb=()"
         X-Content-Type-Options "nosniff"
+        X-Frame-Options "DENY"
         Referrer-Policy "same-origin"
         -Server
     }

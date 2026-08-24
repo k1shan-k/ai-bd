@@ -21,6 +21,13 @@ export default function Overview() {
   const [error, setError] = useState("");
   const [name, setName] = useState("");
   const [slug, setSlug] = useState("");
+  // The slug tracks the name until an operator edits it, otherwise a partially typed name
+  // would leave a stale one-character slug that the API rejects.
+  const [slugEdited, setSlugEdited] = useState(false);
+
+  function slugify(value: string) {
+    return value.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "");
+  }
 
   async function refresh() {
     try {
@@ -36,7 +43,7 @@ export default function Overview() {
     event.preventDefault();
     try {
       await api("/events", { method: "POST", body: JSON.stringify({ name, slug, timezone: "UTC" }) });
-      setName(""); setSlug(""); await refresh();
+      setName(""); setSlug(""); setSlugEdited(false); await refresh();
     } catch (e) { setError((e as Error).message); }
   }
 
@@ -63,8 +70,8 @@ export default function Overview() {
       <article className="card">
         <h2>Create event</h2>
         <form className="form" onSubmit={createEvent}>
-          <div><label>Event name</label><input value={name} onChange={e => { setName(e.target.value); if (!slug) setSlug(e.target.value.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "")); }} required /></div>
-          <div><label>Slug</label><input value={slug} onChange={e => setSlug(e.target.value)} required /></div>
+          <div><label>Event name</label><input value={name} onChange={e => { setName(e.target.value); if (!slugEdited) setSlug(slugify(e.target.value)); }} required /></div>
+          <div><label>Slug</label><input value={slug} onChange={e => { setSlugEdited(true); setSlug(e.target.value); }} pattern="[a-z0-9][a-z0-9-]{1,98}[a-z0-9]" title="Three or more characters: lowercase letters, numbers, and hyphens" required /></div>
           <button>Create workspace</button>
         </form>
       </article>

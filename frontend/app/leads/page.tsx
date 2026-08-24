@@ -2,12 +2,12 @@
 
 import Link from "next/link";
 import { useSearchParams } from "next/navigation";
-import { useEffect, useMemo, useState } from "react";
+import { Suspense, useEffect, useMemo, useState } from "react";
 import { api } from "@/lib/api";
 
 type Lead = { id: string; full_name: string; email: string; telegram: string; company?: string; sponsor_answer: string; state: string; delivery_state: string; automation_status: string };
 
-export default function Leads() {
+function LeadPipeline() {
   const searchParams = useSearchParams();
   const eventId = searchParams.get("event_id");
   const [leads, setLeads] = useState<Lead[]>([]);
@@ -33,4 +33,11 @@ export default function Leads() {
       {visible.length === 0 && <p>No leads match this view. Import a CSV from an event workspace.</p>}
     </section>
   </>;
+}
+
+// useSearchParams needs a Suspense boundary, otherwise the static prerender of /leads fails.
+export default function Leads() {
+  return <Suspense fallback={<section className="card full" aria-busy="true"><p>Loading lead pipeline…</p></section>}>
+    <LeadPipeline />
+  </Suspense>;
 }

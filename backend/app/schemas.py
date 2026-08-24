@@ -17,6 +17,13 @@ class EventCreate(BaseModel):
     timezone: str = "UTC"
 
 
+class EventUpdate(BaseModel):
+    name: str | None = Field(default=None, min_length=2, max_length=255)
+    starts_at: datetime | None = None
+    outreach_cutoff_at: datetime | None = None
+    timezone: str | None = Field(default=None, min_length=1, max_length=64)
+
+
 class EventRead(ORMModel):
     id: str
     slug: str
@@ -37,6 +44,7 @@ class ContextRead(ORMModel):
     event_id: str
     version: int
     content_hash: str
+    documents: dict[str, str]
     compiled: dict[str, Any]
     activated_at: datetime
 

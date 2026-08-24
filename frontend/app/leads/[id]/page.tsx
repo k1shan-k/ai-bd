@@ -79,7 +79,7 @@ export default function LeadDetail({ params }: { params: Promise<{ id: string }>
   }
   async function bookMeeting(event: FormEvent) {
     event.preventDefault();
-    await request("/meetings", { starts_at: new Date(meeting.starts_at).toISOString(), timezone: meeting.timezone, provider: "fake" });
+    await request("/meetings", { starts_at: new Date(meeting.starts_at).toISOString(), timezone: meeting.timezone });
   }
 
   if (!data) return <p>{error || "Loading…"}</p>;
@@ -105,7 +105,7 @@ export default function LeadDetail({ params }: { params: Promise<{ id: string }>
       </article>
 
       <article className="card"><h2>Automation controls</h2><div className="form">
-        <button disabled={busy} onClick={() => request("/research", { provider: "fake" })}>Run cited research</button>
+        <button disabled={busy} onClick={() => request("/research", {})}>Run configured cited research</button>
         {!data.campaign_id && <button disabled={busy || !activeCampaign} onClick={() => activeCampaign && request("/workflow/start", { campaign_id: activeCampaign.id })}>Start active campaign</button>}
         <button className="secondary" disabled={busy} onClick={() => request("", { automation_status: data.lead.automation_status === "paused" ? "active" : "paused" }, "PATCH")}>Pause / resume</button>
         <button className="secondary" disabled={busy} onClick={async () => { setBusy(true); try { setNotice(JSON.stringify(await api("/worker/run-due", { method: "POST", body: JSON.stringify({}) }), null, 2)); await load(); } catch (caught) { setError((caught as Error).message); } finally { setBusy(false); } }}>Process due actions</button>

@@ -104,7 +104,7 @@ Server route handlers are:
 - `/api/backend/[...path]`: authenticated management BFF. It forwards GET, POST, PUT, PATCH, and DELETE and always uses the backend admin key.
 - `/api/webhooks/[...path]`: unauthenticated-at-CRM but allowlisted raw-body callback proxy; backend provider signatures remain mandatory.
 
-The management BFF currently returns only the upstream `Content-Type` header. It drops other response headers, including CSV `Content-Disposition`. The event UI performs imports with its built-in/default mapping path; it does not expose a complete interactive mapping-preview workflow. The lead page explicitly requests `{provider: "fake"}` for manual research, which production rejects, and includes an unused `provider` field when requesting a meeting (Pydantic ignores it). These are known UI integration defects, not backend contracts.
+The management BFF currently returns only the upstream `Content-Type` header. It drops other response headers, including CSV `Content-Disposition`. The event UI performs imports with its detected/default mapping path but does not expose a complete interactive mapping-preview editor. Lead research now requests the configured source provider, so production uses Tavily after it is enabled; meeting requests use the active calendar adapter without a fake-provider override. The remaining header/mapping gaps are UI integration limitations, not backend contract changes.
 
 ### Backend roles
 
@@ -499,45 +499,44 @@ Rollback must preserve database compatibility. Reverting application containers 
 
 GitHub Actions defines two jobs:
 
-- Backend: Python 3.11 via `uv`, PostgreSQL 16 service, `ruff check backend`, and `pytest --cov=app` in fake mode.
-- Frontend: Node.js 22, `npm install`, `npm run typecheck`, and `npm run build`.
+- Backend: Python 3.11 via frozen `uv.lock`, PostgreSQL 16, `ruff check backend scripts`, `pytest --cov=app`, release secret scan, production environment/preflight validation, and shell syntax checks.
+- Frontend: Node.js 22 via `package-lock.json`, `npm ci`, `npm run typecheck`, and `npm run build`.
 
-The test suite covers configuration, context compilation, imports, negotiation, operations, policy, provider integrations, RBAC/security, workflows, and PostgreSQL concurrency. Presence of a test does not prove a deployment/provider account is valid. Run [Provider validation](provider-validation.md) with authorized test identities and [Acceptance and verification matrix](verification.md) before outreach.
+The test suite covers configuration, LLM adapters/structured output, context compilation, imports, AI workflows, timing, negotiation, operations, policy, provider integrations, RBAC/security, worker behavior, and PostgreSQL concurrency. Presence of a test does not prove a deployment/provider account is valid. Run [Provider validation](provider-validation.md), [Production checklist](production-checklist.md), and an internal-identity pilot before outreach.
 
-At the time this document was authored in the sandbox:
+Current verified development-host evidence:
 
-- Python Ruff checks and syntax compilation passed.
-- Full backend tests could not run because application dependencies such as FastAPI were absent.
-- Frontend typecheck/build could not run because Node dependencies were absent.
-- Compose/migration runtime could not run because a Compose provider was absent.
-- Live provider validation was not attempted without deployed accounts and internal test identities.
-
-These are unresolved release gates, not successful results.
+- Ruff and the full 109-test backend suite pass.
+- Frontend typecheck and production build pass.
+- A real NVIDIA NIM schema-constrained `no_send=true` smoke passed on the first attempt with `deepseek-ai/deepseek-v4-flash-0731`.
+- Production environment generation/preflight, Compose topology parsing, shell syntax, owner-only secret handling, and release secret scanning pass statically.
+- Docker image/runtime validation remains for the clean deployment host because this development VM has no Docker-compatible CLI.
+- Live connector/callback and backup/restore drills require authorized production accounts and internal test identities.
 
 ## 16. Known limitations and implementation gaps
 
 The following are deliberate disclosures of current behavior:
 
-1. No LLM or autonomous negotiation/conversation engine exists; wording and classification are deterministic.
-2. Lead/campaign/action/offer labels are mostly free-form strings. Several declared lead states are never assigned automatically.
+1. Hosted LLM availability, cost, quota, and model lifecycle are external dependencies; malformed/uncertain output fails closed.
+2. Lead/campaign/action/offer labels are mostly free-form strings rather than database enums.
 3. Campaigns do not automatically complete, and silent leads do not automatically become unresponsive.
 4. Follow-ups are scheduled only after successful initial Telegram delivery request completion.
-5. One Telegram account is assumed by the quota ledger.
-6. Local idempotency keys are primarily queue uniqueness and correlation; live send APIs do not provide a uniform provider-native exactly-once guarantee.
+5. One Telegram account is assumed by the quota ledger and singleton listener.
+6. Local idempotency keys provide durable uniqueness/correlation, but live APIs do not provide uniform provider-native exactly-once delivery.
 7. Unknown/ambiguous sends stop at `reconcile_required`; no automated reconciliation consumer exists.
-8. Cal.com metadata correlation is not native booking idempotency.
-9. The UI is shared-admin only even though backend viewer/operator roles exist.
-10. Login throttling is in memory and replica-local.
-11. Provider encryption key rotation is not implemented.
-12. Backup, restore, retention, legal hold, metrics, tracing, alerting, and centralized logging are operator-supplied.
-13. Initial Alembic schema creation depends on current ORM metadata and is not historically deterministic.
-14. SQLite does not provide the production locking/concurrency model.
-15. Outbox dispatch holds database row locks during provider network calls.
-16. The event page does not expose a full interactive import mapping preview.
-17. The lead page’s hard-coded fake research request fails in production.
-18. The management BFF drops upstream response headers other than `Content-Type`, including CSV filename metadata.
-19. Provider readiness on launch requires a fresh Telegram-listener heartbeat even if an operator intends not to use Telegram, because Telegram is part of the implemented campaign sequence.
-20. The audit trail is useful operational history but is not immutable/tamper-evident compliance storage.
+8. Cal.com metadata correlation is not provider-native booking idempotency.
+9. The CRM UI is shared-admin even though backend viewer/operator roles exist.
+10. Login throttling is process-local and must remain single-replica or move to shared storage.
+11. Provider-encryption key rotation is not implemented.
+12. PITR, restore automation, retention/legal hold, metrics, tracing, alerting, and centralized logging are operator-supplied.
+13. Initial Alembic schema creation depends on current ORM metadata and is not historically frozen.
+14. SQLite does not provide the production PostgreSQL locking/concurrency model.
+15. Event import supports detected/default mapping but the CRM does not expose a full interactive mapping-preview editor.
+16. The management BFF drops upstream response headers other than `Content-Type`, including CSV filename metadata.
+17. Launch readiness requires a fresh Telegram-listener heartbeat because Telegram is part of the implemented campaign sequence.
+18. The audit trail is operational history, not immutable/tamper-evident compliance storage.
+19. Baseline Compose secrets are environment-injected and visible to Docker administrators; higher-assurance deployments should use platform secret injection.
+20. Connection-check redaction is field-name based; infrastructure logs and upstream error text still require operational review for accidental sensitive content.
 
 ## 17. Extension guidance
 

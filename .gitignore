@@ -1,4 +1,7 @@
 .env
+.env.*
+!.env.example
+!.env.*.example
 .venv/
 __pycache__/
 .pytest_cache/
@@ -8,7 +11,13 @@ htmlcov/
 *.pyc
 *.db
 *.db-journal
+*.db-wal
+*.db-shm
 data/
+backups/
+release/
+*.tar.gz
+*.tar.gz.sha256
 node_modules/
 .next/
 *.tsbuildinfo
@@ -16,3 +25,7 @@ node_modules/
 semantic-review/
 dist/
 .DS_Store
+
+# Local environment files may contain credentials.
+**/.env.local
+**/.env.*.local

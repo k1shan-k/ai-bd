@@ -39,8 +39,8 @@ Prerequisites: Python 3.11+, `uv`, Node.js 22+, npm, and optionally PostgreSQL 1
 
 ```bash
 cp .env.example .env
-uv sync --extra dev
-cd frontend && npm install && cd ..
+uv sync --frozen --extra dev
+cd frontend && npm ci && cd ..
 uv run alembic upgrade head
 ```
 
@@ -74,29 +74,59 @@ Container deployment is defined in `docker-compose.yml` for local fake mode. A h
 ## Quality gates
 
 ```bash
-uv run ruff check backend
+uv run ruff check backend scripts
 uv run pytest --cov=app --cov-report=term-missing
 cd frontend
 npm run typecheck
 npm run build
+cd ..
+python3 scripts/check-release.py .
 ```
 
-CI runs backend tests against PostgreSQL so row locking and quota tests do not silently degrade to SQLite behavior.
+CI runs backend tests against PostgreSQL so row locking and quota tests do not silently degrade to SQLite behavior. It also uses frozen Python/Node lockfiles, validates production settings, checks shell syntax, and scans release source for high-confidence credentials.
 
-### Validation status in this sandbox
+### Validation status
 
-- Python lint and syntax compilation: passed after the provider-control, callback, heartbeat, and Telegram-cursor changes.
-- Full backend/PostgreSQL tests: authored but not executable here because FastAPI/SQLAlchemy/provider dependencies are absent and this sandbox has integrations-only networking.
-- Frontend typecheck/build: not executable here because Next/React/type packages are absent and the npm cache is empty.
-- Migration/Compose runtime: not executable here because PostgreSQL binaries/images and a Docker Compose provider are unavailable.
-- Live callback/provider validation: requires the operator's deployed accounts and internal test identities.
+Verified on this host:
 
-These are explicit release blockers, not successful test results. CI or the authorized production host must run every remaining gate before outreach.
+- Full backend Ruff and 109-test suite pass.
+- Frontend typecheck and production build pass.
+- Alembic upgrade/check and the PostgreSQL concurrency gates passed during the implementation verification cycle.
+- Deterministic AI journey passes from CSV import through event-scoped research, personalized outreach, cross-channel replies, structured memory, qualification, authoritative slots, booking, and confirmation.
+- A real schema-validated no-send smoke through NVIDIA NIM and `deepseek-ai/deepseek-v4-flash-0731` passed on the first attempt; reasoning remained ignored and `no_send=true` was enforced.
+- NVIDIA request shape, fixed endpoint, final-content-only parsing, usage, authorization failures, dedicated-key validation, and production configuration are covered.
+- Production environment generation/preflight, owner-only secret handling, shell syntax, Compose network/port isolation, and release-secret scanning pass statically.
+- The temporary public test stack is stopped; there are no SponsorFlow listeners or processes on this host.
+
+Still required before **live external outreach**:
+
+- Deploy the reviewed release to a new, clean VM with Docker Compose, DNS, firewall policy, encrypted storage, and HTTPS. This development host has no Docker-compatible CLI and is not the production target.
+- Configure and validate authorized SES, Telegram, WhatsApp, Cal.com, and Tavily accounts and signed callbacks over the production HTTPS origin.
+- Complete an encrypted off-host backup/restore drill and operational monitoring/alerting.
+- Replace every example event document and sales deck with approved event-specific content.
+- Complete `docs/production-checklist.md` with internal test identities before approving a supervised external cohort.
+
+NVIDIA NIM is the selected hosted LLM path. Vertex AI MaaS, Bedrock, and the unofficial loopback-only Kiro Gateway remain replaceable alternatives. Deterministic code continues to control consent, opt-out, pricing, inventory, timing, quotas, delivery, and booking.
+
+## Production release
+
+```bash
+python3 scripts/generate-production-env.py crm.example.com --output .env.production
+python3 scripts/set-production-secret.py SPONSORFLOW_LLM_NVIDIA_API_KEY --env-file .env.production
+python3 scripts/production-preflight.py --env-file .env.production --require-docker --check-dns
+./scripts/deploy-production.sh .env.production
+```
+
+Use `scripts/build-release.sh` to create a credential-free source archive and checksum. See the deployment runbook before using any command on a live host.
 
 ## Documentation
 
-- [Full technical reference](docs/technical-reference.md)
+- [Operator knowledge base](docs/operator-knowledge-base.md)
 - [Production deployment](docs/deployment.md)
+- [Production go/no-go checklist](docs/production-checklist.md)
+- [Full technical reference](docs/technical-reference.md)
+- [NVIDIA NIM](docs/nvidia-nim.md)
+- [GCP Vertex AI MaaS](docs/gcp-vertex-maas.md)
 - [Architecture and workflows](docs/architecture.md)
 - [Provider validation and production wiring](docs/provider-validation.md)
 - [Security and operating runbook](docs/security-and-operations.md)

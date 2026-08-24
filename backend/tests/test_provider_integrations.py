@@ -48,7 +48,7 @@ def test_delivery_status_does_not_regress_and_permanent_bounce_suppresses(
     )
     assert start.status_code == 200
     cycle = client.post(
-        "/api/v1/worker/run-due", json={"now": "2026-08-17T10:10:00Z"}
+        "/api/v1/worker/run-due", json={"now": "2026-08-17T14:00:00Z"}
     )
     assert cycle.status_code == 200
     detail = client.get(f"/api/v1/leads/{imported_lead['id']}").json()

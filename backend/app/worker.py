@@ -1,6 +1,7 @@
 import argparse
 import asyncio
 from datetime import UTC, datetime
+from time import monotonic
 from typing import Any
 
 from sqlalchemy import select, text
@@ -11,6 +12,16 @@ from app.database import SessionLocal, create_db_and_tables
 from app.models import TelegramUpdateCursor, WorkerHeartbeat, utcnow
 from app.operations import handle_inbound_event
 from app.workflows import run_worker_cycle
+
+
+def cycle_has_activity(result: dict) -> bool:
+    if result.get("expired_offer_reservations"):
+        return True
+    return any(
+        bool(value)
+        for section in ("enqueue", "dispatch")
+        for value in result.get(section, {}).values()
+    )
 
 
 def record_heartbeat(name: str, status: str = "running", details: dict | None = None) -> None:
@@ -106,7 +117,9 @@ async def telegram_listener() -> None:
             if owner_session.bind and owner_session.bind.dialect.name == "postgresql":
                 lock_acquired = bool(
                     owner_session.scalar(
-                        text("SELECT pg_try_advisory_lock(hashtext('sponsorflow.telegram.listener'))")
+                        text(
+                            "SELECT pg_try_advisory_lock(hashtext('sponsorflow.telegram.listener'))"
+                        )
                     )
                 )
                 if not lock_acquired:
@@ -177,10 +190,19 @@ async def telegram_listener() -> None:
 
 async def serve(interval: int, limit: int) -> None:
     listener = asyncio.create_task(telegram_listener())
+    idle_log_interval_seconds = 5 * 60
+    last_log_at = monotonic()
+    print({"worker_started": True, "interval_seconds": interval, "limit": limit}, flush=True)
     try:
         while True:
             result = await run_once(limit)
-            print(result, flush=True)
+            now = monotonic()
+            if cycle_has_activity(result):
+                print(result, flush=True)
+                last_log_at = now
+            elif now - last_log_at >= idle_log_interval_seconds:
+                print({"worker_idle": True, "heartbeat": "fresh"}, flush=True)
+                last_log_at = now
             await asyncio.sleep(interval)
     finally:
         listener.cancel()
@@ -191,7 +213,9 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="SponsorFlow durable action worker")
     parser.add_argument("--once", action="store_true", help="process one cycle and exit")
     parser.add_argument(
-        "--healthcheck", action="store_true", help="exit successfully when worker heartbeat is fresh"
+        "--healthcheck",
+        action="store_true",
+        help="exit successfully when worker heartbeat is fresh",
     )
     parser.add_argument("--interval", type=int, default=10)
     parser.add_argument("--limit", type=int, default=100)

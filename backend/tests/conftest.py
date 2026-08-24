@@ -8,6 +8,20 @@ TEST_DB = Path(__file__).parent / "test.db"
 os.environ["SPONSORFLOW_ENVIRONMENT"] = "test"
 os.environ.setdefault("SPONSORFLOW_DATABASE_URL", f"sqlite:///{TEST_DB}")
 os.environ["SPONSORFLOW_PROVIDER_MODE"] = "fake"
+os.environ["SPONSORFLOW_LLM_PROVIDER"] = "fake"
+os.environ["SPONSORFLOW_LLM_MODEL"] = ""
+# Tests exercise the unexposed local RBAC path. A developer .env must not leak management
+# keys into the test settings, otherwise every fixture request is rejected with 401.
+for _bootstrap_key in (
+    "SPONSORFLOW_ADMIN_API_KEY",
+    "SPONSORFLOW_OPERATOR_API_KEY",
+    "SPONSORFLOW_VIEWER_API_KEY",
+    "SPONSORFLOW_INBOUND_WEBHOOK_TOKEN",
+    "SPONSORFLOW_LLM_API_KEY",
+    "SPONSORFLOW_LLM_VERTEX_ACCESS_TOKEN",
+    "SPONSORFLOW_LLM_NVIDIA_API_KEY",
+):
+    os.environ[_bootstrap_key] = ""
 
 from app.database import Base, engine  # noqa: E402
 from app.main import app  # noqa: E402
@@ -16,9 +30,12 @@ from app.main import app  # noqa: E402
 @pytest.fixture(autouse=True)
 def clean_database():
     Base.metadata.drop_all(engine)
+    engine.dispose()
+    TEST_DB.unlink(missing_ok=True)
     Base.metadata.create_all(engine)
     yield
     Base.metadata.drop_all(engine)
+    engine.dispose()
     TEST_DB.unlink(missing_ok=True)
 
 
@@ -35,6 +52,7 @@ def valid_documents():
         "voice-and-style.md": "---\npersona: sponsorship team\n---\nBe useful.",
         "event.md": "---\nname: Test Summit\ntimezone: UTC\n---\nA focused summit.",
         "audience.md": "---\nexpected_attendance: 200\n---\nTechnology leaders.",
+        "sales-deck.md": "---\nowner: partnerships\n---\nA focused event for Web3 builders, protocol teams, and infrastructure leaders.",
         "packages.md": "---\npackages:\n  - id: gold\n    name: Gold\n    list_price: 10000\n    min_price: 9000\n    perks: [booth, logo]\n  - id: silver\n    name: Silver\n    list_price: 5000\n    min_price: 4500\n    perks: [logo]\n---\nApproved tiers.",
         "negotiation-policy.md": "---\ncurrency: USD\nmax_discount_percent: 10\nallowed_custom_perks: [newsletter mention]\nforbidden_promises: [guaranteed sales]\nmandatory_escalation: [legal terms]\noffer_expiry_days: 7\n---\nStay in bounds.",
         "inventory.md": "---\ninventory:\n  gold: 2\n  silver: 4\n---\nAvailable inventory.",

@@ -1,14 +1,14 @@
-.PHONY: install test lint api worker web compose
+.PHONY: install test lint api worker web compose production-preflight production-deploy production-status production-backup release
 
 install:
-	uv sync --extra dev
-	cd frontend && npm install
+	uv sync --frozen --extra dev
+	cd frontend && npm ci
 
 test:
 	uv run pytest
 
 lint:
-	uv run ruff check backend
+	uv run ruff check backend scripts
 	cd frontend && npm run typecheck
 
 api:
@@ -22,3 +22,18 @@ web:
 
 compose:
 	docker compose up --build
+
+production-preflight:
+	python3 scripts/production-preflight.py --env-file .env.production --require-docker --check-dns
+
+production-deploy:
+	./scripts/deploy-production.sh .env.production
+
+production-status:
+	./scripts/production-status.sh .env.production
+
+production-backup:
+	./scripts/production-backup.sh .env.production
+
+release:
+	./scripts/build-release.sh

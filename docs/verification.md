@@ -1,60 +1,54 @@
 # Acceptance and verification matrix
 
-This matrix distinguishes implemented evidence from checks that still require a dependency-enabled/PostgreSQL environment.
+This matrix separates code/test evidence from checks that require the clean production host and authorized provider accounts.
 
 | Criterion | Implementation evidence | Test evidence | Current status |
 |---|---|---|---|
-| Only exact yes/maybe enters outreach | `importer.normalize_answer`, import gate | `test_sponsor_answer_requires_exact_yes_or_maybe` | Implemented; suite not run here |
-| Duplicate files/leads/messages are idempotent | Savepoint claims, unique keys, outbox/provider IDs | import replay, provider replay, PostgreSQL concurrent import/provider tests | Implemented; PostgreSQL CI required |
-| Ambiguous identities do not merge | email/Telegram conflict quarantine, WhatsApp support signal | import fixtures | Implemented; suite not run here |
-| Global suppression covers all events/channels | contact identity ledger, shared contact lock, post-lock import recheck, all-lead lock/cancel/stop | two-event suppression and PostgreSQL suppression/import race tests | Implemented; PostgreSQL CI required |
-| Telegram never exceeds 20 new contacts/day | setting hard max, locked daily ledger | 21-lead workflow test and 25-thread PostgreSQL test | Implemented; PostgreSQL CI required |
-| Local daytime and cutoff apply | timezone scheduler plus enqueue/dispatch policy | New York opening, closing, DST, invalid-zone tests | Implemented; suite not run here |
-| Reply/terminal state cancels later channels | lead→action→outbox lock fence plus independent terminal dispatch guard | reply replay, terminal cancellation, workflow replay/reopen tests | Implemented; PostgreSQL race CI recommended |
-| Manual takeover blocks automation | lead-first cancellation and manual action | takeover and resume/outbox tests | Implemented; suite not run here |
-| Context is immutable and pinned | event lock, hash/version constraints, lead context ID | version/idempotency/pinning tests | Implemented; suite not run here |
-| Personalization claims are cited and used | Tavily/CSV research fact schema, URL/time/excerpt/relevance provenance, conservative confidence, first fit angle in initial email | fake research/composed-message tests; live Tavily evaluation pending | Implemented; live evaluation required |
-| Offer cannot break floor/discount/perk/promise limits | deterministic offer validator with normalized forbidden-promise and mandatory-escalation matching | accepted/rejected boundary and punctuation/spacing bypass tests | Implemented; suite not run here |
-| Inventory is shared across context versions | event/package ledger and row locks | idempotent offer/version exhaustion tests | Implemented; PostgreSQL CI required |
-| Offer reservations settle correctly | replacement, expiry-at-selection, suppression, terminal/reopen, selected winner | idempotency, expired-winner, lost, reopen, selected-winner tests | Implemented; suite not run here |
-| Call-ready prospects qualify/book | pinned qualification rules, Cal.com slots/bookings/lifecycle webhook, idempotent local meeting | call/slot test and disabled-policy test | Implemented; Cal.com sandbox contract pending |
-| Callbacks are authentic and replay-safe | internal HMAC plus SNS certificate/topic pin, Meta HMAC, Cal.com HMAC, provider-event claim | internal signature/staleness/replay tests | Native adapters implemented; live callback tests pending |
-| Fake sends cannot become production truth | production config rejects fake; campaign readiness requires configured live adapters | config tests | Implemented; suite not run here |
-| Operator actions are attributable | private API-key roles, signed HttpOnly web session, route middleware, timeline/audit entities | RBAC/operations tests; frontend auth build pending | Implemented; external IdP recommended for larger teams |
-| Full CSV-to-call pilot works | CRM + fake provider simulation | campaign simulation test | Implemented in fake mode; suite not run here |
+| Only exact yes/maybe enters outreach | normalized import gate and provenance | exact-answer/import tests | Verified in suite |
+| Duplicate files/leads/messages are idempotent | claims, unique keys, outbox/provider IDs | replay and PostgreSQL concurrency tests | Verified in suite/CI |
+| Ambiguous identities do not merge | cross-identifier quarantine | import fixtures | Verified in suite |
+| Global suppression covers events/channels | shared contact lock and all-lead cancellation | two-event and PostgreSQL race tests | Verified in suite/CI |
+| Telegram never exceeds 20 new contacts/day | hard config bound and locked daily ledger | workflow and threaded PostgreSQL tests | Verified in suite/CI |
+| Local daytime/cutoff apply | timezone scheduler and send policy | DST/opening/closing/invalid-zone tests | Verified in suite |
+| Reply/terminal/manual state cancels automation | lock fences and dispatch guards | workflow cancellation/reopen/takeover tests | Verified in suite |
+| Context is immutable and pinned | hash/version/context IDs | context/pinning tests | Verified in suite |
+| Research claims are cited | Tavily/CSV schema and exact-URL validation | fabricated/unsupported claim tests | Verified in suite; live Tavily quality review required |
+| LLM is schema-bound and fail-closed | provider-neutral client, Pydantic outputs, bounded retry | malformed/unsafe/provider adapter tests | Verified; real NVIDIA no-send smoke passed |
+| LLM cannot execute transactions | no provider/send/suppression/offer/calendar tools in LLM layer | AI workflow/policy tests | Verified in architecture and suite |
+| Offer respects floor/caps/perks/inventory | deterministic validator and shared ledger | boundary, bypass, expiry, replacement, race tests | Verified in suite/CI |
+| Call-ready prospects qualify/book | pinned rules and calendar adapter | slot/booking/conflict tests | Verified in suite; live Cal.com contract required |
+| Callbacks are authentic/replay-safe | SNS/Meta/Cal HMAC and provider-event claims | signature/staleness/replay tests | Verified in suite; live callbacks required |
+| Fake sends cannot become production truth | production rejects fake and readiness gates launch | config/workflow tests | Verified |
+| Operator actions are attributable | API-key roles, web session, audit entities | RBAC/operations/auth tests | Verified; external IdP recommended for larger teams |
+| Full CSV-to-call pilot works | CRM, workflows, adapters, fake simulation | deterministic AI end-to-end test | Verified in fake mode; internal live pilot required |
+| Production source is credential-free | ignore rules, release scanner, archive builder | static secret scan | Verified statically; repeat on release artifact |
+| Public topology exposes only HTTPS gateway | Compose edge/backend/egress networks | static Compose assertions/preflight | Verified statically; runtime external scan required |
 
-## Commands attempted in the current sandbox
+## Commands verified on this development host
 
-```text
-PYENV_VERSION=3.11.15 python -m ruff check backend scripts
-# Passed after final provider/cursor changes
-
-PYENV_VERSION=3.11.15 python -m compileall -q backend scripts
-# Passed after final provider/cursor changes
-
-PYENV_VERSION=3.11.15 pytest -q
-# Blocked at collection: ModuleNotFoundError: fastapi
-
-npm run typecheck
-# Blocked: Next/React/@types packages are not installed; npm cache is empty
-
-docker compose --env-file <generated-env> -f docker-compose.production.yml config
-# Blocked: no Docker Compose provider is installed
+```bash
+uv run ruff check backend scripts
+PYTHONPATH=backend uv run pytest -q
+cd frontend && npm run typecheck && npm run build
+python3 scripts/production-preflight.py --env-file <synthetic-owner-only-env>
+bash -n scripts/*.sh
 ```
 
-The sandbox is `INTEGRATIONS_ONLY`, so missing PyPI/npm dependencies cannot be downloaded. These blocked checks are not passes.
+Results: Ruff passed, 109 backend tests passed, frontend typecheck/build passed, and synthetic production preflight/static Compose isolation passed. A real NVIDIA NIM schema-validated `no_send=true` smoke passed on the first attempt. Docker runtime/image validation is unavailable on this development VM because no Docker-compatible CLI is installed.
 
-## Required release gate
+## Required release and live gate
 
-A release candidate is not approved until a network-enabled environment or CI completes:
+A release candidate is not approved for external outreach until:
 
-1. `uv sync --extra dev`.
-2. PostgreSQL-backed `uv run pytest --cov=app --cov-report=term-missing`.
-3. `uv run ruff check backend`.
-4. `npm install`, `npm run typecheck`, and `npm run build`.
-5. Migration up/down test on a production-like PostgreSQL snapshot.
-6. Provider sandbox contract tests for every enabled adapter.
-7. Internal-identities end-to-end run with verified callbacks.
-8. Backup/restore and outbox reconciliation drill.
-9. Security review of gateway authentication, provider signature adapters, secrets, logs, and retention.
-10. Operator sign-off on context, packages, stock, negotiation caps, cutoff, and calendar.
+1. Frozen `uv.lock` and `package-lock.json` installs pass in CI.
+2. PostgreSQL-backed tests and migrations pass.
+3. Release archive secret scan and checksum pass.
+4. Production Compose images build and run on the clean host.
+5. External scan confirms only 80/443 are public and HTTPS headers/certificate are valid.
+6. Provider sandbox checks pass for NVIDIA, Tavily, SES, Telegram, WhatsApp, and Cal.com.
+7. Signed callbacks and an internal-identities end-to-end run pass.
+8. Backup/restore and outbox reconciliation drill passes.
+9. Monitoring, retention, incident, rotation, and rollback owners are assigned.
+10. Operators sign off context, packages, inventory, negotiation caps, cutoff, calendar, recipients, and supervised cohort size.
+
+Use [Production checklist](production-checklist.md) as the binding go/no-go record.

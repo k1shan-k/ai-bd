@@ -29,9 +29,19 @@ jobs:
       - uses: astral-sh/setup-uv@v5
         with:
           python-version: "3.11"
-      - run: uv sync --extra dev
-      - run: uv run ruff check backend
+      - run: uv sync --frozen --extra dev
+      - run: uv run ruff check backend scripts
       - run: uv run pytest --cov=app --cov-report=term-missing
+      - run: python scripts/check-release.py .
+      - name: Validate production configuration contract
+        run: |
+          python scripts/generate-production-env.py ci.sponsorflow.example --output .env.production
+          DUMMY_PREFIX=nvapi
+          sed -i "s/^SPONSORFLOW_LLM_NVIDIA_API_KEY=$/SPONSORFLOW_LLM_NVIDIA_API_KEY=${DUMMY_PREFIX}-ci-validation-not-real-000000000000/" .env.production
+          python scripts/production-preflight.py --env-file .env.production
+          rm -f .env.production
+      - name: Validate shell scripts
+        run: bash -n scripts/*.sh
 
   frontend:
     runs-on: ubuntu-latest
@@ -43,6 +53,8 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: "22"
-      - run: npm install
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - run: npm ci
       - run: npm run typecheck
       - run: npm run build

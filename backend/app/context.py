@@ -1,6 +1,7 @@
 import hashlib
 import json
 from dataclasses import dataclass
+from datetime import date, datetime, time
 from decimal import Decimal, InvalidOperation
 from typing import Any
 
@@ -14,6 +15,7 @@ from app.models import ContextVersion, Event, PackageInventory
 REQUIRED_EVENT_DOCUMENTS = {
     "event.md",
     "audience.md",
+    "sales-deck.md",
     "packages.md",
     "negotiation-policy.md",
     "inventory.md",
@@ -30,6 +32,26 @@ class ParsedDocument:
     body: str
 
 
+def _json_safe(value: Any) -> Any:
+    """YAML coerces timestamps to Python objects that the JSON columns reject.
+
+    Front matter is operator-authored, so a documented field such as
+    ``starts_at: 2027-01-15T09:00:00Z`` must not fail activation. Scalars become strings that
+    round-trip as ISO 8601 while containers keep their shape.
+    """
+    if isinstance(value, dict):
+        return {str(key): _json_safe(item) for key, item in value.items()}
+    if isinstance(value, (list, tuple, set)):
+        return [_json_safe(item) for item in value]
+    if value is None or isinstance(value, (bool, int, float, str)):
+        return value
+    if isinstance(value, (datetime, date, time)):
+        return value.isoformat()
+    if isinstance(value, Decimal):
+        return str(value)
+    return str(value)
+
+
 def parse_markdown_document(content: str) -> ParsedDocument:
     if not content.startswith("---\n"):
         return ParsedDocument(metadata={}, body=content.strip())
@@ -40,7 +62,7 @@ def parse_markdown_document(content: str) -> ParsedDocument:
     metadata = yaml.safe_load(raw) or {}
     if not isinstance(metadata, dict):
         raise ValueError("front matter must be a mapping")
-    return ParsedDocument(metadata=metadata, body=content[marker + 5 :].strip())
+    return ParsedDocument(metadata=_json_safe(metadata), body=content[marker + 5 :].strip())
 
 
 def _money(value: Any, field: str, errors: list[str]) -> Decimal:

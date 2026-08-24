@@ -21,6 +21,7 @@ services:
     environment: &backend-environment
       SPONSORFLOW_DATABASE_URL: postgresql+psycopg://sponsorflow:local-only-change-me@postgres/sponsorflow
       SPONSORFLOW_PROVIDER_MODE: fake
+      SPONSORFLOW_LLM_PROVIDER: fake
       SPONSORFLOW_ADMIN_API_KEY: local-admin-key
       SPONSORFLOW_INBOUND_WEBHOOK_TOKEN: local-webhook-key
       SPONSORFLOW_PROVIDER_ENCRYPTION_KEY: MDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDA=
@@ -52,7 +53,10 @@ services:
     build:
       context: .
       dockerfile: frontend/Dockerfile
+    init: true
     environment:
+      SPONSORFLOW_ENVIRONMENT: development
+      SPONSORFLOW_TRUST_PROXY: "false"
       INTERNAL_API_URL: http://api:8000/api/v1
       INTERNAL_API_ORIGIN: http://api:8000
       SPONSORFLOW_ADMIN_API_KEY: local-admin-key
