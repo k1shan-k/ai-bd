@@ -10,6 +10,9 @@ os.environ.setdefault("SPONSORFLOW_DATABASE_URL", f"sqlite:///{TEST_DB}")
 os.environ["SPONSORFLOW_PROVIDER_MODE"] = "fake"
 os.environ["SPONSORFLOW_LLM_PROVIDER"] = "fake"
 os.environ["SPONSORFLOW_LLM_MODEL"] = ""
+os.environ["SPONSORFLOW_LLM_NVIDIA_ENDPOINT"] = (
+    "https://integrate.api.nvidia.com/v1/chat/completions"
+)
 # Tests exercise the unexposed local RBAC path. A developer .env must not leak management
 # keys into the test settings, otherwise every fixture request is rejected with 401.
 for _bootstrap_key in (

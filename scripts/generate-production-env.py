@@ -40,6 +40,10 @@ def render(domain: str) -> str:
         ("SPONSORFLOW_WEB_SESSION_SECRET", token()),
         ("SPONSORFLOW_LLM_PROVIDER", "nvidia_nim"),
         ("SPONSORFLOW_LLM_MODEL", "deepseek-ai/deepseek-v4-flash-0731"),
+        (
+            "SPONSORFLOW_LLM_NVIDIA_ENDPOINT",
+            "https://integrate.api.nvidia.com/v1/chat/completions",
+        ),
         ("SPONSORFLOW_LLM_NVIDIA_API_KEY", ""),
         ("SPONSORFLOW_LLM_NVIDIA_TOP_P", "0.95"),
         ("SPONSORFLOW_LLM_NVIDIA_THINKING", "true"),

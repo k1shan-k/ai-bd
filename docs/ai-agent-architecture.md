@@ -42,7 +42,7 @@ Configuration:
 - `llm_provider`: `fake`, `gateway`, `bedrock`, `vertex_maas`, `nvidia_nim`, or `disabled`
 - shared: `llm_model`, timeouts, retries, character/token limits, temperatures, confidence, and autonomy
 - gateway: `llm_gateway_url`, `llm_gateway_path`, `llm_gateway_protocol`, `llm_api_key`
-- NVIDIA NIM: `llm_nvidia_api_key`, `llm_nvidia_top_p`, `llm_nvidia_thinking`, and `llm_nvidia_reasoning_effort`; the hosted endpoint is fixed in code
+- NVIDIA NIM: `llm_nvidia_endpoint`, `llm_nvidia_api_key`, `llm_nvidia_top_p`, `llm_nvidia_thinking`, and `llm_nvidia_reasoning_effort`; the endpoint setting accepts only the pinned official NVIDIA URL
 - Bedrock: `llm_bedrock_region` and ambient AWS credentials
 - Vertex: `llm_vertex_project_id`, region, endpoint, API version, auth mode, and bounded token TTL
 

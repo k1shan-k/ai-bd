@@ -50,6 +50,9 @@ class Settings(BaseSettings):
     llm_vertex_auth_mode: Literal["gcloud", "adc", "metadata", "access_token"] = "metadata"
     llm_vertex_access_token: str | None = None
     llm_vertex_token_ttl_seconds: int = Field(default=3_000, ge=60, le=3_500)
+    llm_nvidia_endpoint: Literal[
+        "https://integrate.api.nvidia.com/v1/chat/completions"
+    ] = "https://integrate.api.nvidia.com/v1/chat/completions"
     llm_nvidia_api_key: str | None = None
     llm_nvidia_top_p: float = Field(default=0.95, ge=0, le=1)
     llm_nvidia_thinking: bool = True

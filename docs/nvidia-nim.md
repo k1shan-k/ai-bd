@@ -7,6 +7,7 @@ SponsorFlow supports NVIDIA's hosted OpenAI-compatible chat API through a dedica
 ```text
 SPONSORFLOW_LLM_PROVIDER=nvidia_nim
 SPONSORFLOW_LLM_MODEL=deepseek-ai/deepseek-v4-flash-0731
+SPONSORFLOW_LLM_NVIDIA_ENDPOINT=https://integrate.api.nvidia.com/v1/chat/completions
 SPONSORFLOW_LLM_NVIDIA_API_KEY=REPLACEMENT_KEY
 SPONSORFLOW_LLM_NVIDIA_TOP_P=0.95
 SPONSORFLOW_LLM_NVIDIA_THINKING=true
@@ -20,7 +21,7 @@ The adapter calls the fixed endpoint:
 https://integrate.api.nvidia.com/v1/chat/completions
 ```
 
-The URL is not environment-configurable, preventing an accidental or malicious configuration change from redirecting the NVIDIA bearer credential. The request is unary (`stream=false`). `chat_template_kwargs` is sent at the top level of the HTTP JSON body, matching how the OpenAI SDK merges `extra_body` into a request.
+`SPONSORFLOW_LLM_NVIDIA_ENDPOINT` makes the non-secret destination explicit in generated and example environment files, but application validation accepts only the exact URL above. An accidental or malicious environment change therefore cannot redirect the NVIDIA bearer credential. The request is unary (`stream=false`). `chat_template_kwargs` is sent at the top level of the HTTP JSON body, matching how the OpenAI SDK merges `extra_body` into a request.
 
 NVIDIA availability, trial status, terms, account permissions, quota, and model lifecycle remain external prerequisites. A configured model can still be rejected or unavailable for a particular NVIDIA account.
 

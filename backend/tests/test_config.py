@@ -73,7 +73,18 @@ def production_nvidia_settings(**updates):
 def test_production_accepts_nvidia_nim_with_dedicated_key():
     configured = production_nvidia_settings()
     assert configured.llm_provider == "nvidia_nim"
+    assert (
+        configured.llm_nvidia_endpoint
+        == "https://integrate.api.nvidia.com/v1/chat/completions"
+    )
     assert configured.llm_nvidia_reasoning_effort == "high"
+
+
+def test_nvidia_nim_rejects_endpoint_override():
+    with pytest.raises(ValidationError, match="llm_nvidia_endpoint"):
+        production_nvidia_settings(
+            llm_nvidia_endpoint="https://attacker.example/v1/chat/completions"
+        )
 
 
 def test_production_nvidia_nim_requires_dedicated_key():

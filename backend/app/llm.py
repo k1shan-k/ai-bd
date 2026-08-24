@@ -868,7 +868,6 @@ class NvidiaNIMLLMProvider:
     """NVIDIA-hosted NIM adapter for its OpenAI-compatible chat API."""
 
     name = "nvidia-nim"
-    _url = "https://integrate.api.nvidia.com/v1/chat/completions"
 
     def __init__(self, settings: Settings) -> None:
         if not settings.llm_model:
@@ -878,6 +877,7 @@ class NvidiaNIMLLMProvider:
             raise LLMConfigurationError("llm_nvidia_api_key is not configured")
         self.settings = settings
         self.model = settings.llm_model
+        self._url = settings.llm_nvidia_endpoint
         self._api_key = api_key
 
     async def complete(
